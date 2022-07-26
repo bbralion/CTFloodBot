@@ -1,13 +1,14 @@
 package main
 
 import (
+	"strings"
+
+	"github.com/bbralion/CTFloodBot/pkg/core"
+	"github.com/bbralion/CTFloodBot/pkg/handlers"
+	"github.com/bbralion/CTFloodBot/pkg/utils"
 	telegramapi "github.com/go-telegram-bot-api/telegram-bot-api"
 	"github.com/jinzhu/configor"
-	"github.com/kbats183/CTFloodBot/pkg/core"
-	"github.com/kbats183/CTFloodBot/pkg/handlers"
-	"github.com/kbats183/CTFloodBot/pkg/utils"
 	"go.uber.org/zap"
-	"strings"
 )
 
 var config handlers.HandlerConfig

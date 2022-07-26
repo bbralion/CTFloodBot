@@ -1,4 +1,4 @@
-module github.com/kbats183/CTFloodBot
+module github.com/bbralion/CTFloodBot
 
 go 1.18
 

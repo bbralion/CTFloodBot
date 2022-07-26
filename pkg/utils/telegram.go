@@ -1,8 +1,9 @@
 package utils
 
 import (
-	telegramapi "github.com/go-telegram-bot-api/telegram-bot-api"
 	"strings"
+
+	telegramapi "github.com/go-telegram-bot-api/telegram-bot-api"
 )
 
 func addIfNotNil(slice []string, name string, objectIsNil bool) []string {

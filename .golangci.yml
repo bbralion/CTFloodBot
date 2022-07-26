@@ -1,0 +1,48 @@
+run:
+  timeout: 2m
+
+linters:
+  enable:
+    - asciicheck
+    - bodyclose
+    - containedctx
+    - contextcheck
+    - deadcode
+    - dogsled
+    - durationcheck
+    - dupl
+    - errchkjson
+    - errname
+    - errorlint
+    - exhaustive
+    - exportloopref
+    - gocritic
+    - gofumpt
+    - goimports
+    - gomnd
+    - gomoddirectives
+    - gosimple
+    - govet
+    - ifshort
+    - ineffassign
+    - importas
+    - misspell
+    - noctx
+    - prealloc
+    - predeclared
+    - revive
+    - staticcheck
+    - thelper
+    - tparallel
+    - unconvert
+    - unparam
+    - unused
+    - varcheck
+    - whitespace
+    - wrapcheck
+
+linters-settings:
+  unparam:
+    check-exported: false
+  unused:
+    check-exported: false

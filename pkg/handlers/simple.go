@@ -3,8 +3,9 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+
+	"github.com/bbralion/CTFloodBot/pkg/core"
 	telegramapi "github.com/go-telegram-bot-api/telegram-bot-api"
-	"github.com/kbats183/CTFloodBot/pkg/core"
 	"go.uber.org/zap"
 )
 
