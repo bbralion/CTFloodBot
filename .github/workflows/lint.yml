@@ -2,7 +2,7 @@ name: lint
 on:
   - pull_request
 jobs:
-  code:
+  lint:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

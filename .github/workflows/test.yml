@@ -2,7 +2,7 @@ name: test
 on:
   - pull_request
 jobs:
-  code:
+  test:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -10,4 +10,4 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v3
       - name: Run tests
-        uses: make test
+        run: make test
