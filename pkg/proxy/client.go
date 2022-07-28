@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"time"
 
 	"github.com/bbralion/CTFloodBot/internal/genproto"
@@ -72,7 +71,7 @@ func (c *Client) Run(ctx context.Context) (err error) {
 	if c.Logger == nil || c.Handler == nil || len(c.Matchers) < 1 {
 		return errors.New("logger, handler and matchers must be specified for client")
 	}
-	c.Logger = c.Logger.With(zap.Namespace("client"))
+	c.Logger = c.Logger.Named("client")
 	logErr := func(msg string) {
 		c.Logger.Error(msg, zap.Error(err))
 	}
@@ -123,6 +122,9 @@ func (c *Client) Run(ctx context.Context) (err error) {
 			return
 		case update := <-updatech:
 			c.Handler.Serve(&proxyCtx{ctx, api, c.Logger}, update)
+		case <-ctx.Done():
+			c.Logger.Info("shutting down")
+			return
 		}
 	}
 }
@@ -163,37 +165,8 @@ func (c *Client) getConfig(ctx context.Context, gc genproto.MultiplexerServiceCl
 	return config, nil
 }
 
-// internalHTTPTransport is a roundtripper for the http proxy which adds authorization
-type internalHTTPTransport struct {
-	http.RoundTripper
-	logger *zap.Logger
-	token  string
-}
-
-func (t *internalHTTPTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	r.Header.Set("Authorization", t.token)
-	resp, err := t.RoundTripper.RoundTrip(r)
-	if err != nil {
-		t.logger.Warn("roundtripping request to tg proxy failed", zap.Error(err))
-		return nil, fmt.Errorf("tg proxy roundtrip failed: %w", err)
-	}
-
-	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
-		return nil, errors.New("request to tg proxy failed: unauthorized")
-	}
-	return resp, nil
-}
-
 func (c *Client) connectHTTP(endpoint string) (*tgbotapi.BotAPI, error) {
-	httpC := &internalHTTPTransport{
-		http.DefaultTransport,
-		c.Logger,
-		c.Token,
-	}
-
-	api, err := tgbotapi.NewBotAPIWithClient(c.Token, endpoint, &http.Client{
-		Transport: httpC,
-	})
+	api, err := tgbotapi.NewBotAPIWithAPIEndpoint(c.Token, endpoint)
 	if err != nil {
 		return nil, fmt.Errorf("failed to setup telegram bot api: %w", err)
 	}

@@ -118,5 +118,5 @@ func NewGRPCRegistrar(logger *zap.Logger, client genproto.MultiplexerServiceClie
 	if client == nil {
 		return nil, errors.New("gRPC client must not be nil")
 	}
-	return &gRPCRegistrar{logger.With(zap.Namespace("registrar")), client}, nil
+	return &gRPCRegistrar{logger.Named("registrar"), client}, nil
 }
