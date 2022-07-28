@@ -15,9 +15,9 @@ var ErrNoMatchers = errors.New("cannot register with zero matchers")
 
 // Registrar allows registration of command handlers for subsequent receival of updates
 type Registrar interface {
-	// Register registers a new command handler with the given name and matchers.
+	// Register registers a new command handler with the given matchers.
 	// The context should span the lifetime of the registered handler and canceled when it dies.
-	Register(ctx context.Context, name string, matchers MatcherGroup) (UpdateChan, ErrorChan, error)
+	Register(ctx context.Context, matchers MatcherGroup) (UpdateChan, ErrorChan, error)
 }
 
 // gRPCRegistrar is an implementation of Registrar using grpc
@@ -25,13 +25,12 @@ type gRPCRegistrar struct {
 	client genproto.MultiplexerServiceClient
 }
 
-func (r *gRPCRegistrar) Register(ctx context.Context, name string, matchers MatcherGroup) (UpdateChan, ErrorChan, error) {
+func (r *gRPCRegistrar) Register(ctx context.Context, matchers MatcherGroup) (UpdateChan, ErrorChan, error) {
 	if len(matchers) < 1 {
 		return nil, nil, ErrNoMatchers
 	}
 
 	request := &genproto.RegisterRequest{
-		Name:     name,
 		Matchers: make([]string, len(matchers)),
 	}
 	for i, m := range matchers {

@@ -26,16 +26,15 @@ func TestGRPCRegistrar(t *testing.T) {
 	req.NoError(err, "registrar creation shouldn't fail")
 
 	// Registration without any matchers
-	ctx, name := context.Background(), "fake"
-	_, _, err = registrar.Register(ctx, name, MatcherGroup{})
+	ctx := context.Background()
+	_, _, err = registrar.Register(ctx, MatcherGroup{})
 	req.ErrorIs(err, ErrNoMatchers, "shouldn't be able to register with no matchers")
 
 	// Failed registration request
 	mockMuxClient.EXPECT().RegisterHandler(ctx, &genproto.RegisterRequest{
-		Name:     name,
 		Matchers: []string{"/command"},
 	}).Return(nil, errors.New("fake register error"))
-	_, _, err = registrar.Register(ctx, name, MatcherGroup{regexp.MustCompile("/command")})
+	_, _, err = registrar.Register(ctx, MatcherGroup{regexp.MustCompile("/command")})
 	req.Error(err, "shouldn't be able to continue if register request fails")
 
 	// Successful registration with single update
@@ -49,13 +48,12 @@ func TestGRPCRegistrar(t *testing.T) {
 	ctx, cancel := context.WithCancel(ctx)
 	mockUpdateStream := mockproto.NewMockMultiplexerService_RegisterHandlerClient(ctrl)
 	mockMuxClient.EXPECT().RegisterHandler(ctx, &genproto.RegisterRequest{
-		Name:     name,
 		Matchers: []string{"/command"},
 	}).Return(mockUpdateStream, nil)
 	mockUpdateStream.EXPECT().Recv().Return(&genproto.Update{Json: tgUpdateBytes}, nil)
 	mockUpdateStream.EXPECT().Recv().Return(nil, status.FromContextError(context.Canceled).Err())
 
-	updatech, errorch, err := registrar.Register(ctx, name, MatcherGroup{regexp.MustCompile("/command")})
+	updatech, errorch, err := registrar.Register(ctx, MatcherGroup{regexp.MustCompile("/command")})
 	req.NoError(err, "registration shouldn't fail")
 
 	var update tgbotapi.Update

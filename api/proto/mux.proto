@@ -18,8 +18,7 @@ message ConfigResponse {
 }
 
 message RegisterRequest {
-  string name = 1;
-  repeated string matchers = 2;
+  repeated string matchers = 1;
 }
 
 service MultiplexerService {
