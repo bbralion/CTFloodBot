@@ -6,7 +6,9 @@ import (
 	"errors"
 
 	"github.com/bbralion/CTFloodBot/internal/genproto"
+	"github.com/bbralion/CTFloodBot/pkg/retry"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
+	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -20,9 +22,59 @@ type Registrar interface {
 	Register(ctx context.Context, matchers MatcherGroup) (UpdateChan, ErrorChan, error)
 }
 
-// gRPCRegistrar is an implementation of Registrar using grpc
+// gRPCRegistrar is an implementation of Registrar using grpc with retries
 type gRPCRegistrar struct {
+	logger *zap.Logger
 	client genproto.MultiplexerServiceClient
+}
+
+func (r *gRPCRegistrar) tryRegister(ctx context.Context, request *genproto.RegisterRequest, updatech chan tgbotapi.Update) *svcError {
+	var stream genproto.MultiplexerService_RegisterHandlerClient
+	err := retry.Backoff(func() error {
+		var err error
+		stream, err = r.client.RegisterHandler(ctx, request)
+
+		if err == nil {
+			return nil
+		} else if s, ok := status.FromError(err); ok && s.Code() == codes.Unavailable {
+			r.logger.Warn("gRPC registrar failed to connect", zap.Error(err))
+			return err
+		}
+		return retry.Unrecoverable(err)
+	})
+	if err != nil {
+		if s, ok := status.FromError(err); ok && (s.Code() == codes.Canceled || s.Code() == codes.DeadlineExceeded) {
+			// Client disconnected before we managed to register
+			return nil
+		}
+		return wrap(err, "RegisterHandler request failed", "failed to register command handler")
+	}
+
+	wrapUpdateErr := func(err error, info string) *svcError {
+		return wrap(err, info, "failed to receive updates")
+	}
+
+	for {
+		updatePB, err := stream.Recv()
+		if err != nil {
+			if s, ok := status.FromError(err); ok && (s.Code() == codes.Canceled || s.Code() == codes.DeadlineExceeded) {
+				// If the updates are simply stopped, then no error has happened
+				return nil
+			}
+			return wrapUpdateErr(err, "unexpected error receiving next update")
+		}
+
+		var update tgbotapi.Update
+		if err := json.Unmarshal(updatePB.GetJson(), &update); err != nil {
+			return wrapUpdateErr(err, "failed to unmarshal json update")
+		}
+
+		select {
+		case updatech <- update:
+		case <-ctx.Done():
+			return nil
+		}
+	}
 }
 
 func (r *gRPCRegistrar) Register(ctx context.Context, matchers MatcherGroup) (UpdateChan, ErrorChan, error) {
@@ -37,54 +89,39 @@ func (r *gRPCRegistrar) Register(ctx context.Context, matchers MatcherGroup) (Up
 		request.Matchers[i] = m.String()
 	}
 
-	stream, err := r.client.RegisterHandler(ctx, request)
-	if err != nil {
-		return nil, nil, wrap(err, "RegisterHandler request failed", "failed to register command handler")
-	}
-
 	updatech := make(chan tgbotapi.Update)
 	errorch := make(chan error, 1)
 	go func() {
 		defer close(updatech)
 		defer close(errorch)
-		// Should only be used once as errorch has capacity of 1
-		sendError := func(err error, info string) {
-			wrerr := wrap(err, info, "failed to receive updates")
-			errorch <- wrerr
-		}
 
-		for {
-			updatePB, err := stream.Recv()
-			if err != nil {
-				if s, ok := status.FromError(err); ok && (s.Code() == codes.Canceled || s.Code() == codes.DeadlineExceeded) {
-					// If the updates are simply stopped, then no error has happened
-					return
-				}
-				sendError(err, "unexpected error receiving next update")
-				return
+		err := retry.Static(func() error {
+			err := r.tryRegister(ctx, request, updatech)
+			if err == nil {
+				return nil
 			}
 
-			var update tgbotapi.Update
-			if err := json.Unmarshal(updatePB.GetJson(), &update); err != nil {
-				sendError(err, "failed to unmarshal json update")
-				return
+			// We can retry only due to connectivity issues
+			if s, ok := status.FromError(err.Unwrap()); ok && s.Code() == codes.Unavailable {
+				r.logger.Warn("gRPC registrar reconnecting stream", err.ZapFields()...)
+				return err
 			}
-
-			select {
-			case updatech <- update:
-			case <-ctx.Done():
-				return
-			}
+			return retry.Unrecoverable(err)
+		})
+		if err != nil {
+			// Recovery failed, log and return the error
+			serr := err.(*svcError)
+			r.logger.Error("gRPC registrar unable to reconnect", serr.ZapFields()...)
+			errorch <- serr
 		}
 	}()
-
 	return updatech, errorch, nil
 }
 
-// NewGRPCRegistrar creates a Registrar based on the gRPC API client
-func NewGRPCRegistrar(client genproto.MultiplexerServiceClient) (Registrar, error) {
+// NewGRPCRegistrar creates a Registrar based on the gRPC API client with preconfigured retries
+func NewGRPCRegistrar(logger *zap.Logger, client genproto.MultiplexerServiceClient) (Registrar, error) {
 	if client == nil {
 		return nil, errors.New("gRPC client must not be nil")
 	}
-	return &gRPCRegistrar{client}, nil
+	return &gRPCRegistrar{logger, client}, nil
 }

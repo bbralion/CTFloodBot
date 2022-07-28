@@ -19,7 +19,7 @@ mocks:
 
 .PHONY: test
 test:
-	go test -race ./...
+	go test -v -race -count=1 ./...
 .PHONY: lint
 lint:
 	golangci-lint run -v

@@ -13,16 +13,22 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
 func TestGRPCRegistrar(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	req := require.New(t)
+	logcfg := zap.NewDevelopmentConfig()
+	logcfg.DisableStacktrace = true
+	logger, err := logcfg.Build()
+	req.NoError(err, "should be able to create logger")
 
 	// Creation of registrar
 	mockMuxClient := mockproto.NewMockMultiplexerServiceClient(ctrl)
-	registrar, err := NewGRPCRegistrar(mockMuxClient)
+	registrar, err := NewGRPCRegistrar(logger, mockMuxClient)
 	req.NoError(err, "registrar creation shouldn't fail")
 
 	// Registration without any matchers
@@ -30,14 +36,7 @@ func TestGRPCRegistrar(t *testing.T) {
 	_, _, err = registrar.Register(ctx, MatcherGroup{})
 	req.ErrorIs(err, ErrNoMatchers, "shouldn't be able to register with no matchers")
 
-	// Failed registration request
-	mockMuxClient.EXPECT().RegisterHandler(ctx, &genproto.RegisterRequest{
-		Matchers: []string{"/command"},
-	}).Return(nil, errors.New("fake register error"))
-	_, _, err = registrar.Register(ctx, MatcherGroup{regexp.MustCompile("/command")})
-	req.Error(err, "shouldn't be able to continue if register request fails")
-
-	// Successful registration with single update
+	// Two failed registration requests followed by a successful registration with single update
 	var tgUpdate tgbotapi.Update
 	tgUpdate.Message = &tgbotapi.Message{
 		Text: "message text",
@@ -47,6 +46,12 @@ func TestGRPCRegistrar(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(ctx)
 	mockUpdateStream := mockproto.NewMockMultiplexerService_RegisterHandlerClient(ctrl)
+	mockMuxClient.EXPECT().RegisterHandler(ctx, &genproto.RegisterRequest{
+		Matchers: []string{"/command"},
+	}).Return(nil, status.Error(codes.Unavailable, "fake network error 1"))
+	mockMuxClient.EXPECT().RegisterHandler(ctx, &genproto.RegisterRequest{
+		Matchers: []string{"/command"},
+	}).Return(nil, status.Error(codes.Unavailable, "fake network error 2"))
 	mockMuxClient.EXPECT().RegisterHandler(ctx, &genproto.RegisterRequest{
 		Matchers: []string{"/command"},
 	}).Return(mockUpdateStream, nil)
