@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"regexp"
 
 	"github.com/bbralion/CTFloodBot/internal/genproto"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
@@ -12,11 +11,13 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+var ErrNoMatchers = errors.New("cannot register with zero matchers")
+
 // Registrar allows registration of command handlers for subsequent receival of updates
 type Registrar interface {
 	// Register registers a new command handler with the given name and matchers.
 	// The context should span the lifetime of the registered handler and canceled when it dies.
-	Register(ctx context.Context, name string, matchers []regexp.Regexp) (tgbotapi.UpdatesChannel, <-chan error, error)
+	Register(ctx context.Context, name string, matchers MatcherGroup) (UpdateChan, ErrorChan, error)
 }
 
 // gRPCRegistrar is an implementation of Registrar using grpc
@@ -24,9 +25,9 @@ type gRPCRegistrar struct {
 	client genproto.MultiplexerServiceClient
 }
 
-func (r *gRPCRegistrar) Register(ctx context.Context, name string, matchers []regexp.Regexp) (tgbotapi.UpdatesChannel, <-chan error, error) {
+func (r *gRPCRegistrar) Register(ctx context.Context, name string, matchers MatcherGroup) (UpdateChan, ErrorChan, error) {
 	if len(matchers) < 1 {
-		return nil, nil, errors.New("cannot register handler with no matchers")
+		return nil, nil, ErrNoMatchers
 	}
 
 	request := &genproto.RegisterRequest{

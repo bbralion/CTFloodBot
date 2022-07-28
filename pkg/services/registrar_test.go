@@ -16,7 +16,7 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-func TestGRPCRegistrarRegister(t *testing.T) {
+func TestGRPCRegistrar(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	req := require.New(t)
 
@@ -27,15 +27,15 @@ func TestGRPCRegistrarRegister(t *testing.T) {
 
 	// Registration without any matchers
 	ctx, name := context.Background(), "fake"
-	_, _, err = registrar.Register(ctx, name, []regexp.Regexp{})
-	req.Error(err, "shouldn't be able to register with no matchers")
+	_, _, err = registrar.Register(ctx, name, MatcherGroup{})
+	req.ErrorIs(err, ErrNoMatchers, "shouldn't be able to register with no matchers")
 
 	// Failed registration request
 	mockMuxClient.EXPECT().RegisterHandler(ctx, &genproto.RegisterRequest{
 		Name:     name,
 		Matchers: []string{"/command"},
 	}).Return(nil, errors.New("fake register error"))
-	_, _, err = registrar.Register(ctx, name, []regexp.Regexp{*regexp.MustCompile("/command")})
+	_, _, err = registrar.Register(ctx, name, MatcherGroup{regexp.MustCompile("/command")})
 	req.Error(err, "shouldn't be able to continue if register request fails")
 
 	// Successful registration with single update
@@ -55,7 +55,7 @@ func TestGRPCRegistrarRegister(t *testing.T) {
 	mockUpdateStream.EXPECT().Recv().Return(&genproto.Update{Json: tgUpdateBytes}, nil)
 	mockUpdateStream.EXPECT().Recv().Return(nil, status.FromContextError(context.Canceled).Err())
 
-	updatech, errorch, err := registrar.Register(ctx, name, []regexp.Regexp{*regexp.MustCompile("/command")})
+	updatech, errorch, err := registrar.Register(ctx, name, MatcherGroup{regexp.MustCompile("/command")})
 	req.NoError(err, "registration shouldn't fail")
 
 	var update tgbotapi.Update

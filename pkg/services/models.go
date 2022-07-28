@@ -1,15 +1,23 @@
 package services
 
-import "time"
+import (
+	"regexp"
 
-type RegisterHandlerRequest struct {
-	Name     string   `json:"name"`
-	Matchers []string `json:"matchers"`
-}
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
+)
 
-type RegisterHandlerResponse struct {
-	// Must be consistent on renewals
-	Channel string `json:"channel"`
-	// Deadline is expected to be at least 30 seconds from now
-	Deadline time.Time `json:"deadline"`
+type (
+	UpdateChan tgbotapi.UpdatesChannel
+	ErrorChan  <-chan error
+)
+
+type MatcherGroup []*regexp.Regexp
+
+func (g MatcherGroup) MatchString(s string) bool {
+	for _, m := range g {
+		if m.MatchString(s) {
+			return true
+		}
+	}
+	return false
 }
