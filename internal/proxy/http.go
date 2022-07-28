@@ -40,7 +40,7 @@ type HTTP struct {
 	requestCounter int64
 }
 
-var pathRe = regexp.MustCompile("^/proxy(\\w+)(/.+)$")
+var pathRe = regexp.MustCompile(`^/proxy(\w+)(/.+)$`)
 
 // Path returns the HTTP proxy path format string suitable for use with tgbotapi
 func (p *HTTP) Path() string {
@@ -55,7 +55,7 @@ func (p *HTTP) ListenAndServe() error {
 		return errors.New("telegram API token must be specified")
 	}
 
-	endpointUrl, err := url.Parse(p.Endpoint)
+	endpointURL, err := url.Parse(p.Endpoint)
 	if err != nil {
 		return fmt.Errorf("invalid endpoint url specified: %w", err)
 	}
@@ -66,16 +66,15 @@ func (p *HTTP) ListenAndServe() error {
 	handler := httputil.ReverseProxy{
 		Director: func(r *http.Request) {
 			// Route requests using the telegram API token and with a limited body
-			reqUrl := *endpointUrl
-			reqUrl.User = nil
-			reqUrl.Path = fmt.Sprintf(p.Endpoint, p.Token, r.URL.Path[1:])
-			r.URL = &reqUrl
+			reqURL := *endpointURL
+			reqURL.User = nil
+			reqURL.Path = fmt.Sprintf(p.Endpoint, p.Token, r.URL.Path[1:])
+			r.URL = &reqURL
 			r.Body = http.MaxBytesReader(nil, r.Body, DefaultMaxBodyBytes)
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			p.Logger.Warn("request to telegram API failed", zap.Error(err), zap.Int64("request_id", requestID(r)))
 			w.WriteHeader(http.StatusBadGateway)
-			return
 		},
 		Transport: p.Transport,
 	}
@@ -128,7 +127,7 @@ type clientCtxKey struct{}
 func (p *HTTP) AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		groups := pathRe.FindStringSubmatch(r.URL.Path)
-		if len(groups) != 3 {
+		if groups == nil {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
