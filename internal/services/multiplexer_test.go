@@ -7,11 +7,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bbralion/CTFloodBot/pkg/models"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
 	"github.com/stretchr/testify/require"
 )
 
-func startExpectingMuxClient(wg *sync.WaitGroup, req *require.Assertions, mux Multiplexer, updates []tgbotapi.Update, matchers MatcherGroup) {
+func startExpectingMuxClient(wg *sync.WaitGroup, req *require.Assertions, mux Multiplexer, updates []tgbotapi.Update, matchers models.MatcherGroup) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ch, err := mux.Register(ctx, matchers)
 	req.NoError(err, "should register without error")
@@ -46,15 +47,15 @@ func TestMultiplexer(t *testing.T) {
 
 	var wg sync.WaitGroup
 	mux := NewMultiplexer(1)
-	startExpectingMuxClient(&wg, req, mux, updates[:2], MatcherGroup{regexp.MustCompile("^/[ab]$")})
-	startExpectingMuxClient(&wg, req, mux, updates[:6], MatcherGroup{regexp.MustCompile("^/[a-f]$")})
-	startExpectingMuxClient(&wg, req, mux, updates[:9], MatcherGroup{regexp.MustCompile("^/[a-j]$")})
-	startExpectingMuxClient(&wg, req, mux, updates[:9], MatcherGroup{regexp.MustCompile(".*")})
+	startExpectingMuxClient(&wg, req, mux, updates[:2], models.MatcherGroup{regexp.MustCompile("^/[ab]$")})
+	startExpectingMuxClient(&wg, req, mux, updates[:6], models.MatcherGroup{regexp.MustCompile("^/[a-f]$")})
+	startExpectingMuxClient(&wg, req, mux, updates[:9], models.MatcherGroup{regexp.MustCompile("^/[a-j]$")})
+	startExpectingMuxClient(&wg, req, mux, updates[:9], models.MatcherGroup{regexp.MustCompile(".*")})
 	startExpectingMuxClient(&wg, req, mux, []tgbotapi.Update{
 		{Message: &tgbotapi.Message{Text: "/aboba"}},
 		{Message: &tgbotapi.Message{Text: "/sus"}},
 		{Message: &tgbotapi.Message{Text: "/aboba"}},
-	}, MatcherGroup{regexp.MustCompile("^/(aboba|sus)$")})
+	}, models.MatcherGroup{regexp.MustCompile("^/(aboba|sus)$")})
 
 	for _, update := range updates {
 		mux.Serve(update)

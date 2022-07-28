@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/bbralion/CTFloodBot/pkg/models"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
 )
 
@@ -12,7 +13,7 @@ import (
 type Multiplexer interface {
 	// Register registers a new handler which will receive updates until the context is canceled.
 	// Safe for concurrent use, so matchers can be registered from anywhere.
-	Register(ctx context.Context, matchers MatcherGroup) (UpdateChan, error)
+	Register(ctx context.Context, matchers models.MatcherGroup) (models.UpdateChan, error)
 	// Serve multiplexes the update across the registered handlers.
 	// Isn't safe for concurrent use, so all calls to Serve must be from a single goroutine.
 	Serve(update tgbotapi.Update)
@@ -22,7 +23,7 @@ type (
 	muxKey     uint64
 	muxHandler struct {
 		ctx      context.Context
-		matchers MatcherGroup
+		matchers models.MatcherGroup
 		channel  chan tgbotapi.Update
 	}
 )
@@ -34,7 +35,7 @@ type mapMux struct {
 	bufferLen int
 }
 
-func (m *mapMux) Register(ctx context.Context, matchers MatcherGroup) (UpdateChan, error) {
+func (m *mapMux) Register(ctx context.Context, matchers models.MatcherGroup) (models.UpdateChan, error) {
 	if len(matchers) < 1 {
 		return nil, ErrNoMatchers
 	}

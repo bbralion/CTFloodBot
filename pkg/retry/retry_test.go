@@ -7,29 +7,31 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func assertNumCallsFunc(req *require.Assertions, n int, err error) RecoverFunc {
+func assertNumCallsFunc(req *require.Assertions, n int, tmpErr, finalErr error) func() (error, any) {
 	ctr := 0
-	return func() error {
+	return func() (error, any) {
 		req.Less(ctr, n, "should be called %d times at most", n)
 		ctr++
 		if ctr == n {
-			return err
+			return finalErr, nil
 		}
-		return errors.New("fake recoverable error")
+		return tmpErr, nil
 	}
 }
 
-func testStrategy(req *require.Assertions, n int, strategy func(RecoverFunc) error) {
-	req.NoError(strategy(assertNumCallsFunc(req, n, nil)))
+func testStrategy(req *require.Assertions, n int, strategy func(func() (error, any), ...ErrTransformer) (any, error)) {
+	_, err := strategy(assertNumCallsFunc(req, n, errors.New("fake recoverable error"), nil))
+	req.NoError(err)
 	e := errors.New("fake unrecoverable error")
-	req.ErrorIs(e, strategy(assertNumCallsFunc(req, n, Unrecoverable(e))))
+	_, err = strategy(assertNumCallsFunc(req, n, errors.New("fake recoverable error"), Unrecoverable(e)))
+	req.ErrorIs(e, err)
 }
 
 func TestRetry(t *testing.T) {
 	req := require.New(t)
 
 	for i := 1; i < 4; i++ {
-		testStrategy(req, i, Backoff)
-		testStrategy(req, i, Static)
+		testStrategy(req, i, Backoff[any])
+		testStrategy(req, i, Static[any])
 	}
 }

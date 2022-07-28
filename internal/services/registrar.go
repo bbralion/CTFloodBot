@@ -6,11 +6,10 @@ import (
 	"errors"
 
 	"github.com/bbralion/CTFloodBot/internal/genproto"
+	"github.com/bbralion/CTFloodBot/pkg/models"
 	"github.com/bbralion/CTFloodBot/pkg/retry"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
 	"go.uber.org/zap"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 var ErrNoMatchers = errors.New("cannot register with zero matchers")
@@ -19,7 +18,7 @@ var ErrNoMatchers = errors.New("cannot register with zero matchers")
 type Registrar interface {
 	// Register registers a new command handler with the given matchers.
 	// The context should span the lifetime of the registered handler and canceled when it dies.
-	Register(ctx context.Context, matchers MatcherGroup) (UpdateChan, ErrorChan, error)
+	Register(ctx context.Context, matchers models.MatcherGroup) (models.UpdateChan, models.ErrorChan, error)
 }
 
 // gRPCRegistrar is an implementation of Registrar using grpc with retries
@@ -29,21 +28,16 @@ type gRPCRegistrar struct {
 }
 
 func (r *gRPCRegistrar) tryRegister(ctx context.Context, request *genproto.RegisterRequest, updatech chan tgbotapi.Update) *svcError {
-	var stream genproto.MultiplexerService_RegisterHandlerClient
-	err := retry.Backoff(func() error {
-		var err error
-		stream, err = r.client.RegisterHandler(ctx, request)
-
-		if err == nil {
-			return nil
-		} else if s, ok := status.FromError(err); ok && s.Code() == codes.Unavailable {
-			r.logger.Warn("gRPC registrar failed to connect", zap.Error(err))
-			return retry.Recoverable(err)
+	stream, err := retry.Backoff(func() (error, genproto.MultiplexerService_RegisterHandlerClient) {
+		stream, err := r.client.RegisterHandler(ctx, request)
+		if retry.IsGRPCUnavailable(err) {
+			r.logger.Info("gRPC registrar retrying connection to server", zap.Error(err))
+			return retry.Recoverable(err), nil
 		}
-		return retry.Unrecoverable(err)
+		return retry.Unrecoverable(err), stream
 	})
 	if err != nil {
-		if s, ok := status.FromError(err); ok && (s.Code() == codes.Canceled || s.Code() == codes.DeadlineExceeded) {
+		if retry.IsGRPCCanceled(err) {
 			// Client disconnected before we managed to register
 			return nil
 		}
@@ -57,7 +51,7 @@ func (r *gRPCRegistrar) tryRegister(ctx context.Context, request *genproto.Regis
 	for {
 		updatePB, err := stream.Recv()
 		if err != nil {
-			if s, ok := status.FromError(err); ok && (s.Code() == codes.Canceled || s.Code() == codes.DeadlineExceeded) {
+			if retry.IsGRPCCanceled(err) {
 				// If the updates are simply stopped, then no error has happened
 				return nil
 			}
@@ -77,7 +71,7 @@ func (r *gRPCRegistrar) tryRegister(ctx context.Context, request *genproto.Regis
 	}
 }
 
-func (r *gRPCRegistrar) Register(ctx context.Context, matchers MatcherGroup) (UpdateChan, ErrorChan, error) {
+func (r *gRPCRegistrar) Register(ctx context.Context, matchers models.MatcherGroup) (models.UpdateChan, models.ErrorChan, error) {
 	if len(matchers) < 1 {
 		return nil, nil, ErrNoMatchers
 	}
@@ -95,18 +89,18 @@ func (r *gRPCRegistrar) Register(ctx context.Context, matchers MatcherGroup) (Up
 		defer close(updatech)
 		defer close(errorch)
 
-		err := retry.Static(func() error {
+		_, err := retry.Static(func() (error, any) {
 			err := r.tryRegister(ctx, request, updatech)
 			if err == nil {
-				return nil
+				return nil, nil
 			}
 
 			// We can retry only due to connectivity issues
-			if s, ok := status.FromError(err.Unwrap()); ok && s.Code() == codes.Unavailable {
-				r.logger.Warn("gRPC registrar reconnecting stream", err.ZapFields()...)
-				return err
+			if retry.IsGRPCUnavailable(err.Unwrap()) {
+				r.logger.Info("gRPC registrar reconnecting stream", err.ZapFields()...)
+				return retry.Recoverable(err), nil
 			}
-			return retry.Unrecoverable(err)
+			return retry.Unrecoverable(err), nil
 		})
 		if err != nil {
 			// Recovery failed, log and return the error
@@ -124,5 +118,5 @@ func NewGRPCRegistrar(logger *zap.Logger, client genproto.MultiplexerServiceClie
 	if client == nil {
 		return nil, errors.New("gRPC client must not be nil")
 	}
-	return &gRPCRegistrar{logger, client}, nil
+	return &gRPCRegistrar{logger.With(zap.Namespace("registrar")), client}, nil
 }

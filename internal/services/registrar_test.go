@@ -10,6 +10,7 @@ import (
 
 	"github.com/bbralion/CTFloodBot/internal/genproto"
 	"github.com/bbralion/CTFloodBot/internal/mockproto"
+	"github.com/bbralion/CTFloodBot/pkg/models"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
@@ -33,12 +34,12 @@ func TestGRPCRegistrar(t *testing.T) {
 
 	// Registration without any matchers
 	ctx := context.Background()
-	_, _, err = registrar.Register(ctx, MatcherGroup{})
+	_, _, err = registrar.Register(ctx, models.MatcherGroup{})
 	req.ErrorIs(err, ErrNoMatchers, "shouldn't be able to register with no matchers")
 
 	// Unrecoverable registration request fail
 	mockMuxClient.EXPECT().RegisterHandler(gomock.Any(), gomock.Any()).Return(nil, status.Error(codes.Unauthenticated, "fake unauthenticated error"))
-	updatech, errorch, err := registrar.Register(ctx, MatcherGroup{regexp.MustCompile("/command")})
+	updatech, errorch, err := registrar.Register(ctx, models.MatcherGroup{regexp.MustCompile("/command")})
 	req.NoError(err, "registration shouldn't fail")
 	req.Eventually(func() bool {
 		select {
@@ -82,7 +83,7 @@ func TestGRPCRegistrar(t *testing.T) {
 	mockUpdateStream.EXPECT().Recv().Return(&genproto.Update{Json: tgUpdateBytes}, nil)
 	mockUpdateStream.EXPECT().Recv().Return(nil, status.FromContextError(context.Canceled).Err())
 
-	updatech, errorch, err = registrar.Register(ctx, MatcherGroup{regexp.MustCompile("/command")})
+	updatech, errorch, err = registrar.Register(ctx, models.MatcherGroup{regexp.MustCompile("/command")})
 	req.NoError(err, "registration shouldn't fail")
 
 	var update tgbotapi.Update
