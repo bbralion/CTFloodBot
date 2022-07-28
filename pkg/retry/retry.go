@@ -19,11 +19,16 @@ type unrecoverableError struct {
 }
 
 func (e unrecoverableError) Error() string {
-	return fmt.Sprintf("unrecoverable error: %s", e.Error())
+	return fmt.Sprintf("unrecoverable error: %s", e.wrapped.Error())
 }
 
 func (e unrecoverableError) Unwrap() error {
 	return e.wrapped
+}
+
+// Recoverable is used to explicitly mark an error as recoverable
+func Recoverable(err error) error {
+	return err
 }
 
 // Unrecoverable wraps an error to indicate that it is not recoverable from,

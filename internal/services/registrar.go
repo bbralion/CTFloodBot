@@ -38,7 +38,7 @@ func (r *gRPCRegistrar) tryRegister(ctx context.Context, request *genproto.Regis
 			return nil
 		} else if s, ok := status.FromError(err); ok && s.Code() == codes.Unavailable {
 			r.logger.Warn("gRPC registrar failed to connect", zap.Error(err))
-			return err
+			return retry.Recoverable(err)
 		}
 		return retry.Unrecoverable(err)
 	})
@@ -110,7 +110,8 @@ func (r *gRPCRegistrar) Register(ctx context.Context, matchers MatcherGroup) (Up
 		})
 		if err != nil {
 			// Recovery failed, log and return the error
-			serr := err.(*svcError)
+			var serr *svcError
+			errors.As(err, &serr)
 			r.logger.Error("gRPC registrar unable to reconnect", serr.ZapFields()...)
 			errorch <- serr
 		}

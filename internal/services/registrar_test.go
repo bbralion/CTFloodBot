@@ -36,6 +36,30 @@ func TestGRPCRegistrar(t *testing.T) {
 	_, _, err = registrar.Register(ctx, MatcherGroup{})
 	req.ErrorIs(err, ErrNoMatchers, "shouldn't be able to register with no matchers")
 
+	// Unrecoverable registration request fail
+	mockMuxClient.EXPECT().RegisterHandler(gomock.Any(), gomock.Any()).Return(nil, status.Error(codes.Unauthenticated, "fake unauthenticated error"))
+	updatech, errorch, err := registrar.Register(ctx, MatcherGroup{regexp.MustCompile("/command")})
+	req.NoError(err, "registration shouldn't fail")
+	req.Eventually(func() bool {
+		select {
+		case e, ok := <-errorch:
+			req.True(ok, "error channel should not be empty")
+			req.Error(e, "should receive proper error on channel")
+			return true
+		default:
+			return false
+		}
+	}, time.Second, time.Millisecond*50)
+	req.Eventually(func() bool {
+		select {
+		case _, ok := <-updatech:
+			req.False(ok, "update channel should close without update")
+			return true
+		default:
+			return false
+		}
+	}, time.Second, time.Millisecond*50)
+
 	// Two failed registration requests followed by a successful registration with single update
 	var tgUpdate tgbotapi.Update
 	tgUpdate.Message = &tgbotapi.Message{
@@ -58,7 +82,7 @@ func TestGRPCRegistrar(t *testing.T) {
 	mockUpdateStream.EXPECT().Recv().Return(&genproto.Update{Json: tgUpdateBytes}, nil)
 	mockUpdateStream.EXPECT().Recv().Return(nil, status.FromContextError(context.Canceled).Err())
 
-	updatech, errorch, err := registrar.Register(ctx, MatcherGroup{regexp.MustCompile("/command")})
+	updatech, errorch, err = registrar.Register(ctx, MatcherGroup{regexp.MustCompile("/command")})
 	req.NoError(err, "registration shouldn't fail")
 
 	var update tgbotapi.Update

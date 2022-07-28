@@ -45,3 +45,10 @@ linters-settings:
     check-exported: false
   unused:
     check-exported: false
+  wrapcheck:
+    ignoreSigs:
+      - .Errorf(
+      - errors.New(
+      - status.Error(
+      - retry.Recoverable(
+      - retry.Unrecoverable(
