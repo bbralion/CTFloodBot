@@ -52,3 +52,5 @@ linters-settings:
       - status.Error(
       - retry.Recoverable(
       - retry.Unrecoverable(
+
+modules-download-mode: readonly
