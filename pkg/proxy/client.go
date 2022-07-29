@@ -4,61 +4,41 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/bbralion/CTFloodBot/internal/genproto"
+	"github.com/bbralion/CTFloodBot/internal/models"
 	"github.com/bbralion/CTFloodBot/internal/services"
 	"github.com/bbralion/CTFloodBot/pkg/auth"
-	"github.com/bbralion/CTFloodBot/pkg/models"
 	"github.com/bbralion/CTFloodBot/pkg/retry"
+	"github.com/go-logr/logr"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
-	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
 const defaultTimeout = time.Second * 5
 
-// Context provides Handler's with often needed elements
-type Context interface {
-	context.Context
-	API() *tgbotapi.BotAPI
-	Logger() *zap.Logger
-}
-
-type proxyCtx struct {
-	context.Context
-	api    *tgbotapi.BotAPI
-	logger *zap.Logger
-}
-
-func (ctx *proxyCtx) API() *tgbotapi.BotAPI {
-	return ctx.api
-}
-
-func (ctx *proxyCtx) Logger() *zap.Logger {
-	return ctx.logger
-}
-
 // Handler is a proper handler of update requests received from the proxy
 type Handler interface {
-	Serve(ctx Context, update tgbotapi.Update)
+	Serve(api *tgbotapi.BotAPI, update tgbotapi.Update)
 }
 
 // HandlerFunc is a util type for using functions as Handler's
-type HandlerFunc func(ctx Context, update tgbotapi.Update)
+type HandlerFunc func(api *tgbotapi.BotAPI, update tgbotapi.Update)
 
-func (f HandlerFunc) Serve(ctx Context, update tgbotapi.Update) {
-	f(ctx, update)
+func (f HandlerFunc) Serve(api *tgbotapi.BotAPI, update tgbotapi.Update) {
+	f(api, update)
 }
 
 // Client is the proxy client implementation, it receives updates via gRPC and answers via HTTP
 type Client struct {
-	Logger *zap.Logger
+	Logger logr.Logger
 	// Handler is the telegram update handler used
 	Handler Handler
 	// Matchers specify the matchers used to filter the requests which should be handled by this client
-	Matchers models.MatcherGroup
+	Matchers []string
 	// Token is the auth token used to authorize this client
 	Token string
 	// GRPCEndpoint specifies the (currently insecure) gRPC endpoint to connect to
@@ -67,20 +47,24 @@ type Client struct {
 
 // Run runs the client. It starts by connecting to the gRPC proxy, from which it receives the HTTP
 // proxy endpoint, as well as all of the following updates from telegram.
-func (c *Client) Run(ctx context.Context) (err error) {
-	if c.Logger == nil || c.Handler == nil || len(c.Matchers) < 1 {
+func (c *Client) Run(ctx context.Context) error {
+	if c.Handler == nil || len(c.Matchers) < 1 {
 		return errors.New("logger, handler and matchers must be specified for client")
 	}
-	c.Logger = c.Logger.Named("client")
-	logErr := func(msg string) {
-		c.Logger.Error(msg, zap.Error(err))
+	c.Logger = c.Logger.WithName("client")
+
+	matchers := make(models.MatcherGroup, len(c.Matchers))
+	for i, m := range c.Matchers {
+		var err error
+		if matchers[i], err = regexp.Compile(m); err != nil {
+			return fmt.Errorf("invalid matcher specified: %w", err)
+		}
 	}
 
 	// Begin by setting up a proper grpc connection
 	conn, err := c.connectGRPC()
 	if err != nil {
-		logErr("failed to connect to specified gRPC endpoint")
-		return
+		return fmt.Errorf("connecting to gRPC server: %w", err)
 	}
 	defer conn.Close()
 	gc := genproto.NewMultiplexerServiceClient(conn)
@@ -88,28 +72,20 @@ func (c *Client) Run(ctx context.Context) (err error) {
 	// And immediately test it out by requesting the HTTP endpoint
 	cfg, err := c.getConfig(ctx, gc)
 	if err != nil {
-		logErr("failed to get config")
-		return
+		return fmt.Errorf("getting config via gRPC: %w", err)
 	}
 
 	// Connect to the telegram bot proxy
 	api, err := c.connectHTTP(cfg.GetProxyEndpoint())
 	if err != nil {
-		logErr("failed to connect to telegram http proxy")
-		return
+		return fmt.Errorf("connecting to telegram HTTP proxy: %w", err)
 	}
 
 	// Configure registrar and start listening for updates
-	registrar, err := services.NewGRPCRegistrar(c.Logger, gc)
+	registrar := services.NewGRPCRegistrar(c.Logger, gc)
+	updateCh, err := registrar.Register(ctx, matchers)
 	if err != nil {
-		logErr("failed to setup registrar")
-		return
-	}
-
-	updatech, errorch, err := registrar.Register(ctx, c.Matchers)
-	if err != nil {
-		logErr("failed to register client")
-		return
+		return fmt.Errorf("registering client: %w", err)
 	}
 
 	// Make sure to cancel all requests when we die
@@ -117,14 +93,14 @@ func (c *Client) Run(ctx context.Context) (err error) {
 	defer cancel()
 	for {
 		select {
-		case err = <-errorch:
-			logErr("critical error while receiving updates")
-			return
-		case update := <-updatech:
-			c.Handler.Serve(&proxyCtx{ctx, api, c.Logger}, update)
+		case update := <-updateCh:
+			if update.Error != nil {
+				return fmt.Errorf("receiving updates: %w", err)
+			}
+			c.Handler.Serve(api, update.Update)
 		case <-ctx.Done():
 			c.Logger.Info("shutting down")
-			return
+			return nil
 		}
 	}
 }
@@ -146,18 +122,18 @@ func (c *Client) connectGRPC() (*grpc.ClientConn, error) {
 }
 
 func (c *Client) getConfig(ctx context.Context, gc genproto.MultiplexerServiceClient) (*genproto.Config, error) {
-	config, err := retry.Backoff(func() (error, *genproto.Config) {
+	config, err := retry.Backoff(func() (*genproto.Config, error) {
 		ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
 		defer cancel()
 
 		resp, err := gc.GetConfig(ctx, &genproto.ConfigRequest{})
 		if err == nil {
-			return nil, resp.GetConfig()
+			return resp.GetConfig(), nil
 		} else if retry.IsGRPCUnavailable(err) {
-			c.Logger.Info("retrying connection to gRPC server", zap.Error(err))
-			return retry.Recoverable(err), nil
+			c.Logger.Error(err, "retrying connection to gRPC server")
+			return nil, retry.Recoverable()
 		}
-		return retry.Unrecoverable(err), nil
+		return nil, retry.Unrecoverable(err)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("request to gRPC server failed: %w", err)

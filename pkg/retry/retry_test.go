@@ -7,19 +7,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func assertNumCallsFunc(req *require.Assertions, n int, tmpErr, finalErr error) func() (error, any) {
+func assertNumCallsFunc(req *require.Assertions, n int, tmpErr, finalErr error) func() (any, error) {
 	ctr := 0
-	return func() (error, any) {
+	return func() (any, error) {
 		req.Less(ctr, n, "should be called %d times at most", n)
 		ctr++
 		if ctr == n {
-			return finalErr, nil
+			return nil, finalErr
 		}
-		return tmpErr, nil
+		return nil, tmpErr
 	}
 }
 
-func testStrategy(req *require.Assertions, n int, strategy func(func() (error, any), ...ErrTransformer) (any, error)) {
+func testStrategy(req *require.Assertions, n int, strategy func(func() (any, error), ...ErrTransformer) (any, error)) {
 	_, err := strategy(assertNumCallsFunc(req, n, errors.New("fake recoverable error"), nil))
 	req.NoError(err)
 	e := errors.New("fake unrecoverable error")

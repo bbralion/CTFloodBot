@@ -8,7 +8,7 @@ message Config {
 
 // Update is a single update received by the proxy, passed as the actual stringified update object.
 message Update {
-  bytes json = 1;
+  string json = 1;
 }
 
 message ConfigRequest {}

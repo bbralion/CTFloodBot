@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httputil"
@@ -13,9 +12,9 @@ import (
 
 	internal "github.com/bbralion/CTFloodBot/internal/services"
 	"github.com/bbralion/CTFloodBot/pkg/services"
+	"github.com/go-logr/logr"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
 	"github.com/justinas/alice"
-	"go.uber.org/zap"
 )
 
 // DefaultRequestTimeout is the default timeout to be used for making requests to the telegram API
@@ -27,9 +26,11 @@ const DefaultMaxBodyBytes = 16_000_000
 // HTTP is the telegram API HTTP proxy
 type HTTP struct {
 	http.Server
-	Logger       *zap.Logger
-	AuthProvider services.AuthProvider
-	Allowlist    internal.Allowlist
+	Logger logr.Logger
+	// If set will be used to authenticate clients via a token in the Authorization header
+	AuthProvider services.Authenticator
+	// If set only paths in the allowlist will be allowed
+	Allowlist internal.Allowlist
 	// Transport is the transport to use for making requests to the telegram API.
 	// http.DefaultTransport will be used by default
 	Transport *http.Transport
@@ -48,21 +49,15 @@ func (p *HTTP) Path() string {
 }
 
 func (p *HTTP) ListenAndServe() error {
-	if p.Logger == nil || p.AuthProvider == nil || p.Allowlist == nil {
-		return errors.New(
-			"logger, auth provider and allow list must be specified for the http proxy server")
-	} else if p.Token == "" {
-		return errors.New("telegram API token must be specified")
-	}
-
 	endpointURL, err := url.Parse(p.Endpoint)
 	if err != nil {
 		return fmt.Errorf("invalid endpoint url specified: %w", err)
 	}
 
-	p.Logger = p.Logger.Named("http")
+	p.Logger = p.Logger.WithName("http")
 	p.setDefaults()
 
+	// TODO: implement proper handling of special commands such as setMyCommands
 	handler := httputil.ReverseProxy{
 		Director: func(r *http.Request) {
 			// Route requests using the telegram API token and with a limited body
@@ -73,13 +68,13 @@ func (p *HTTP) ListenAndServe() error {
 			r.Body = http.MaxBytesReader(nil, r.Body, DefaultMaxBodyBytes)
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			p.Logger.Warn("request to telegram API failed", zap.Error(err), zap.Int64("request_id", requestID(r)))
+			p.Logger.Error(err, "request to telegram API failed", "request_id", requestID(r))
 			w.WriteHeader(http.StatusBadGateway)
 		},
 		Transport: p.Transport,
 	}
 
-	p.Handler = alice.New(p.PanicMiddleware, p.RequestIDMiddleware, p.LoggingMiddleware, p.AuthMiddleware).Then(&handler)
+	p.Handler = alice.New(p.PanicMiddleware, p.RequestIDMiddleware, p.LoggingMiddleware, p.AuthMiddleware, p.AllowPathMiddleware).Then(&handler)
 	return p.ListenAndServe()
 }
 
@@ -90,6 +85,7 @@ func (p *HTTP) setDefaults() {
 	if p.Transport.ResponseHeaderTimeout == 0 {
 		p.Transport.ResponseHeaderTimeout = DefaultRequestTimeout
 	}
+
 	if p.Endpoint == "" {
 		p.Endpoint = tgbotapi.APIEndpoint
 	}
@@ -112,9 +108,7 @@ func (p *HTTP) PanicMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if v := recover(); v != nil {
-				p.Logger.Error("recovered from panic",
-					zap.Any("recover", v),
-					zap.Int64("request_id", requestID(r)))
+				p.Logger.Info("recovered from panic", "recover", v, "request_id", requestID(r))
 			}
 		}()
 
@@ -132,35 +126,48 @@ func (p *HTTP) AuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		client, err := p.AuthProvider.Authenticate(groups[1])
-		if err != nil {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
+		if p.AuthProvider != nil {
+			client, err := p.AuthProvider.Authenticate(groups[1])
+			if err != nil {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			authenticatedReq := r.WithContext(context.WithValue(r.Context(), clientCtxKey{}, client))
+			authenticatedReq.URL.Path = groups[2]
+			next.ServeHTTP(w, authenticatedReq)
+		} else {
+			next.ServeHTTP(w, r)
 		}
-
-		authenticatedReq := r.WithContext(context.WithValue(r.Context(), clientCtxKey{}, client))
-		authenticatedReq.URL.Path = groups[2]
-		next.ServeHTTP(w, authenticatedReq)
 	})
 }
 
 func (p *HTTP) LoggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		rcopy := *r
+		rcopy := r.Clone(context.Background())
 
 		// Always log, even on panic
 		defer func() {
 			latency := time.Since(start)
 			p.Logger.Info("handled request",
-				zap.String("uri", rcopy.RequestURI),
-				zap.String("method", rcopy.Method),
-				zap.Duration("latency", latency),
-				zap.String("remote_addr", rcopy.RemoteAddr),
-				zap.Int64("request_id", requestID(r)),
-				zap.Any("client", r.Context().Value(clientCtxKey{})))
+				"uri", rcopy.RequestURI,
+				"method", rcopy.Method,
+				"latency", latency,
+				"remote_addr", rcopy.RemoteAddr,
+				"request_id", requestID(r),
+				"client", r.Context().Value(clientCtxKey{}))
 		}()
 
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (p *HTTP) AllowPathMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if p.Allowlist != nil && !p.Allowlist.Allowed(r.URL.Path) {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
 }

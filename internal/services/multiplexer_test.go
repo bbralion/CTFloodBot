@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bbralion/CTFloodBot/pkg/models"
+	"github.com/bbralion/CTFloodBot/internal/models"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
 	"github.com/stretchr/testify/require"
 )
@@ -47,6 +47,10 @@ func TestMultiplexer(t *testing.T) {
 
 	var wg sync.WaitGroup
 	mux := NewMultiplexer(1)
+
+	_, err := mux.Register(context.Background(), nil)
+	req.Error(err, "registration without matchers")
+
 	startExpectingMuxClient(&wg, req, mux, updates[:2], models.MatcherGroup{regexp.MustCompile("^/[ab]$")})
 	startExpectingMuxClient(&wg, req, mux, updates[:6], models.MatcherGroup{regexp.MustCompile("^/[a-f]$")})
 	startExpectingMuxClient(&wg, req, mux, updates[:9], models.MatcherGroup{regexp.MustCompile("^/[a-j]$")})

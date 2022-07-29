@@ -15,37 +15,35 @@ type (
 )
 
 type recoverError struct {
-	wrapped     error
-	recoverable bool
+	wrapped error
 }
 
 func (e recoverError) Error() string {
-	s := "recoverable error: %s"
-	if !e.recoverable {
-		s = "un" + s
+	if e.wrapped == nil {
+		return "temporary recoverable error"
 	}
-	return fmt.Sprintf(s, e.wrapped.Error())
+	return fmt.Sprintf("unrecoverable error: %s", e.wrapped.Error())
 }
 
 func (e recoverError) Unwrap() error {
 	return e.wrapped
 }
 
-// Recoverable is used to explicitly mark an error as recoverable
-func Recoverable(err error) error {
-	return recoverError{err, true}
+// Recoverable is used to explicitly mark a recovery
+func Recoverable() error {
+	return recoverError{nil}
 }
 
 // Unrecoverable wraps an error to indicate that it is not recoverable from,
 // after which retries will be stopped and it will be returned
 func Unrecoverable(err error) error {
-	return recoverError{err, false}
+	return recoverError{err}
 }
 
 // Recover runs the function using a custom delay scheduler
-func Recover[T any](f func() (error, T), s DelayScheduler, et ...ErrTransformer) (T, error) {
+func Recover[T any](f func() (T, error), s DelayScheduler, et ...ErrTransformer) (T, error) {
 	for {
-		err, ret := f()
+		ret, err := f()
 		for _, t := range et {
 			err = t(err)
 		}
@@ -53,8 +51,8 @@ func Recover[T any](f func() (error, T), s DelayScheduler, et ...ErrTransformer)
 		var re recoverError
 		if err == nil {
 			return ret, nil
-		} else if errors.As(err, &re) && !re.recoverable {
-			return ret, re.Unwrap()
+		} else if errors.As(err, &re) && re.wrapped != nil {
+			return ret, re.wrapped
 		}
 
 		time.Sleep(s())
@@ -68,7 +66,7 @@ const (
 )
 
 // Backoff runs the function using the backoff retry algorithm
-func Backoff[T any](f func() (error, T), et ...ErrTransformer) (T, error) {
+func Backoff[T any](f func() (T, error), et ...ErrTransformer) (T, error) {
 	delay, next := time.Duration(0), DefaultBackoffMinDelay
 	return Recover(f, func() time.Duration {
 		delay, next = next, next*DefaultBackoffFactor
@@ -82,7 +80,7 @@ func Backoff[T any](f func() (error, T), et ...ErrTransformer) (T, error) {
 const DefaultStaticDelay = time.Second
 
 // Static runs the function using a static retry delay
-func Static[T any](f func() (error, T), et ...ErrTransformer) (T, error) {
+func Static[T any](f func() (T, error), et ...ErrTransformer) (T, error) {
 	return Recover(f, func() time.Duration {
 		return DefaultStaticDelay
 	}, et...)

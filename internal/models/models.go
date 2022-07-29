@@ -6,10 +6,12 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
 )
 
-type (
-	UpdateChan tgbotapi.UpdatesChannel
-	ErrorChan  <-chan error
-)
+type PossibleUpdate struct {
+	Update tgbotapi.Update
+	Error  error
+}
+
+type UpdateChan <-chan PossibleUpdate
 
 type MatcherGroup []*regexp.Regexp
 

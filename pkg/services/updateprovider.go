@@ -1,35 +1,38 @@
 package services
 
 import (
-	"fmt"
+	"context"
 
-	"github.com/bbralion/CTFloodBot/pkg/models"
+	"github.com/go-logr/logr"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
 )
 
 // UpdateProvider represents a telegram update provider
 type UpdateProvider interface {
-	Updates() (models.UpdateChan, error)
+	Updates(ctx context.Context) tgbotapi.UpdatesChannel
 }
 
 const DefaultLongPollTimeoutS = 60
 
 type pollingUpdateProvider struct {
-	api *tgbotapi.BotAPI
+	logger logr.Logger
+	api    *tgbotapi.BotAPI
 }
 
-func (p *pollingUpdateProvider) Updates() (models.UpdateChan, error) {
-	updates, err := p.api.GetUpdatesChan(tgbotapi.UpdateConfig{
+func (p *pollingUpdateProvider) Updates(ctx context.Context) tgbotapi.UpdatesChannel {
+	updates, _ := p.api.GetUpdatesChan(tgbotapi.UpdateConfig{
 		Offset:  0,
 		Limit:   p.api.Buffer,
 		Timeout: DefaultLongPollTimeoutS,
 	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get tgbotapi update channel: %w", err)
-	}
-	return models.UpdateChan(updates), nil
+
+	go func() {
+		<-ctx.Done()
+		p.api.StopReceivingUpdates()
+	}()
+	return updates
 }
 
-func NewPollingUpdateProvider(api *tgbotapi.BotAPI) UpdateProvider {
-	return &pollingUpdateProvider{api}
+func NewPollingUpdateProvider(logger logr.Logger, api *tgbotapi.BotAPI) UpdateProvider {
+	return &pollingUpdateProvider{logger, api}
 }

@@ -10,22 +10,26 @@ linters:
     - dogsled
     - durationcheck
     - dupl
+    - errcheck
     - errchkjson
     - errname
     - errorlint
     - exhaustive
     - exportloopref
+    - gocognit
     - gocritic
     - gofumpt
     - goimports
     - gomnd
     - gomoddirectives
+    - gosec
     - gosimple
     - govet
     - ifshort
     - ineffassign
     - importas
     - misspell
+    - nilerr
     - noctx
     - prealloc
     - predeclared
@@ -45,6 +49,8 @@ linters-settings:
     check-exported: false
   unused:
     check-exported: false
+  gocognit:
+    min-complexity: 20
   wrapcheck:
     ignoreSigs:
       - .Errorf(
