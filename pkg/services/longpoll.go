@@ -24,10 +24,6 @@ type LongPollOptions struct {
 	Offset  int
 	Limit   int
 	Timeout time.Duration
-	// Telegram Bot API endpoint
-	Endpoint string
-	// Telegram Bot API token
-	Token string
 	// The HTTP client to use for requests
 	Client *http.Client
 }
