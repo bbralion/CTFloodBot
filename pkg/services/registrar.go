@@ -49,7 +49,7 @@ func (r *gRPCRegistrar) tryRegister(ctx context.Context, request *genproto.Regis
 		}
 
 		var update tgbotapi.Update
-		if err := json.Unmarshal([]byte(updatePB.GetJson()), &update); err != nil {
+		if err := json.Unmarshal([]byte(updatePB.Json), &update); err != nil {
 			return fmt.Errorf("unmarshaling update json: %w", err)
 		}
 
@@ -96,5 +96,8 @@ func (r *gRPCRegistrar) Register(ctx context.Context, matchers models.MatcherGro
 
 // NewGRPCRegistrar creates a Registrar based on the gRPC API client with preconfigured retries
 func NewGRPCRegistrar(logger logr.Logger, client genproto.MultiplexerServiceClient) Registrar {
+	if logger == (logr.Logger{}) {
+		logger = logr.Discard()
+	}
 	return &gRPCRegistrar{logger.WithName("registrar"), client}
 }

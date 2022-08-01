@@ -118,7 +118,7 @@ func Test_gRPCRegistrar_Register(t *testing.T) {
 			defer ctrl.Finish()
 
 			mockMuxClient := mocks.NewMockMultiplexerServiceClient(ctrl)
-			r := NewGRPCRegistrar(logr.Discard(), mockMuxClient)
+			r := NewGRPCRegistrar(logr.Logger{}, mockMuxClient)
 
 			reqMatchers := make([]string, len(tt.args.matchers))
 			for i, m := range tt.args.matchers {
