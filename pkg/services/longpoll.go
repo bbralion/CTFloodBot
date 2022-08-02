@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -10,8 +11,6 @@ import (
 	"path"
 	"strconv"
 	"time"
-
-	jsoniter "github.com/json-iterator/go"
 )
 
 // DefaultLongPollTimeout is the default timeout used for long polling
@@ -19,20 +18,18 @@ const DefaultLongPollTimeout = time.Second * 60
 
 // LongPollOptions specifies various options to use inside the long poll streamer.
 // Offset, Limit and Timeout specify the values to send to Telegram's getUpdates method.
-// By default a Timeout of DefaultLongPollTimeout is used.
+// By default a Timeout of DefaultLongPollTimeout is used, and DefaultCapacity will be used as the default Limit.
 type LongPollOptions struct {
 	Offset  int
 	Limit   int
 	Timeout time.Duration
-	// The HTTP client to use for requests
-	Client *http.Client
+	Client  *http.Client
 }
 
 type longPollStreamer struct {
 	opts        LongPollOptions
 	endpointURL *url.URL
 	params      url.Values
-	iterator    *jsoniter.Iterator
 }
 
 func (s *longPollStreamer) poll(ctx context.Context) (*http.Response, error) {
@@ -49,47 +46,61 @@ func (s *longPollStreamer) poll(ctx context.Context) (*http.Response, error) {
 	if err != nil {
 		// Unwrap url.Error returned from do to avoid leaking url with bot token
 		return nil, fmt.Errorf("doing poll request: %w", errors.Unwrap(err))
-	}
-	if resp.StatusCode != http.StatusOK {
+	} else if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("bad response code while polling: %s", resp.Status)
 	}
 	return resp, nil
 }
 
-func (s *longPollStreamer) parseUpdates(stream chan Maybe[RawUpdate], body io.ReadCloser) error {
-	s.iterator.Reset(body)
-	defer body.Close()
-	defer s.iterator.Reset(nil)
+// readRespones tries to read the response in the fastest way possible
+func (s *longPollStreamer) readResponse(resp *http.Response) (buf []byte, err error) {
+	defer resp.Body.Close()
+
+	if resp.ContentLength != -1 {
+		buf = make([]byte, resp.ContentLength)
+		_, err = io.ReadFull(resp.Body, buf)
+	} else {
+		buf, err = io.ReadAll(resp.Body)
+	}
+	return
+}
+
+func (s *longPollStreamer) parseUpdates(stream chan<- Maybe[RawUpdate], resp *http.Response) error {
+	buf, err := s.readResponse(resp)
+	if err != nil {
+		return fmt.Errorf("reading getUpdates response: %w", err)
+	}
 
 	// Parse API response wrapper
-	var resp struct {
+	var apiResp struct {
 		Ok          bool
 		Description string
-		Result      []jsoniter.RawMessage
+		Result      []RawUpdate
 	}
-	if s.iterator.ReadVal(&resp); s.iterator.Error != nil {
-		return fmt.Errorf("parsing getUpdates response: %w", s.iterator.Error)
+	if err := json.Unmarshal(buf, &apiResp); err != nil {
+		return fmt.Errorf("parsing getUpdates response: %w", err)
 	}
-	if !resp.Ok {
-		return fmt.Errorf("getUpdates response.Ok is false: %s", resp.Description)
+	if !apiResp.Ok {
+		return fmt.Errorf("getUpdates response.Ok is false: %s", apiResp.Description)
 	}
 
-	for _, u := range resp.Result {
-		stream <- Maybe[RawUpdate]{Value: RawUpdate(u)}
+	for _, u := range apiResp.Result {
+		stream <- Maybe[RawUpdate]{Value: u}
 	}
-	if len(resp.Result) > 0 {
-		val := jsoniter.Get(resp.Result[len(resp.Result)-1], "update_id")
-		updateID := val.ToInt()
-		if err := val.LastError(); err != nil {
+	if len(apiResp.Result) > 0 {
+		var updateWrapper struct {
+			UpdateID int `json:"update_id"`
+		}
+		if err := json.Unmarshal(apiResp.Result[len(apiResp.Result)-1], &updateWrapper); err != nil {
 			return fmt.Errorf("retrieving update_id: %w", err)
 		}
-		s.params.Set("offset", strconv.Itoa(updateID+1))
+		s.params.Set("offset", strconv.Itoa(updateWrapper.UpdateID+1))
 	}
 	return nil
 }
 
 func (s *longPollStreamer) Stream(ctx context.Context) RawStream {
-	stream := make(chan Maybe[RawUpdate])
+	stream := make(chan Maybe[RawUpdate], s.opts.Limit)
 	go func() {
 		defer close(stream)
 
@@ -112,7 +123,7 @@ func (s *longPollStreamer) Stream(ctx context.Context) RawStream {
 				return
 			}
 
-			if err := s.parseUpdates(stream, resp.Body); err != nil {
+			if err := s.parseUpdates(stream, resp); err != nil {
 				stream <- Maybe[RawUpdate]{Error: err}
 				return
 			}
@@ -134,6 +145,9 @@ func NewLongPollStreamer(endpoint, token string, opts LongPollOptions) (RawStrea
 	if opts.Timeout == 0 {
 		opts.Timeout = DefaultLongPollTimeout
 	}
+	if opts.Limit == 0 {
+		opts.Limit = DefaultCapacity
+	}
 	if opts.Client == nil {
 		opts.Client = http.DefaultClient
 	}
@@ -142,14 +156,7 @@ func NewLongPollStreamer(endpoint, token string, opts LongPollOptions) (RawStrea
 	endpointURL.Path = path.Join(endpointURL.Path, "bot"+token, "getUpdates")
 	params := make(url.Values)
 	params.Set("timeout", strconv.Itoa(int(opts.Timeout.Seconds())))
-	if opts.Offset != 0 {
-		params.Set("offset", strconv.Itoa(opts.Offset))
-	}
-	if opts.Limit != 0 {
-		params.Set("limit", strconv.Itoa(opts.Limit))
-	}
-	return &longPollStreamer{
-		opts, endpointURL, params,
-		jsoniter.ParseBytes(jsoniter.ConfigFastest, make([]byte, DefaultDecodeBufferSize)),
-	}, nil
+	params.Set("limit", strconv.Itoa(opts.Limit))
+	params.Set("offset", strconv.Itoa(opts.Offset))
+	return &longPollStreamer{opts, endpointURL, params}, nil
 }

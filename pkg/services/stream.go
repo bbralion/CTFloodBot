@@ -2,11 +2,11 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"runtime"
 	"sync"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
-	jsoniter "github.com/json-iterator/go"
 )
 
 // DefaultCapacity is the default capacity which should be passed into Map* and As* functions.
@@ -36,92 +36,64 @@ func (s Stream[T]) Drain() {
 	}
 }
 
-// TODO: place inside MappedStream once type decs inside generic functions are supported
-type mapJob[T, K any] struct {
-	in  Maybe[T]
-	out chan Maybe[K]
-}
-
-// MappedStream maps a stream to a channel in parallel using the given mapper.
-// runtime.NumCPU() goroutines are used for mapping, and the returned channel
-// will have the capacity specified in arguments.
+// MappedStream maps a stream to a stream in parallel using the given mapper. runtime.NumCPU() goroutines
+// are used for mapping, and the returned stream will have the same capacity as the input stream.
+// The output order after processing is not synchronized or defined.
 //
 // Make sure to call stream.Drain if you suddenly stop reading from the returned stream.
-func MappedStream[T, K any](in Stream[Maybe[T]], mapper func(T) (K, error), capacity int,
-) Stream[Maybe[K]] {
+func MappedStream[T, K any](in Stream[Maybe[T]], mapper func(T) (K, error)) Stream[Maybe[K]] {
+	var wg sync.WaitGroup
 	n := runtime.NumCPU()
+	out := make(chan Maybe[K], cap(in))
 
-	// These channels are closed by the parallelizing goroutine
-	outOrder := make(chan Stream[Maybe[K]], n)
-	jobs := make(chan mapJob[T, K], n)
-
-	// Pool of channels, should be ok to use here since the goroutines here should be longlived
-	chpool := sync.Pool{
-		New: func() any {
-			return make(chan Maybe[K])
-		},
-	}
-	// Parallelize input
-	go func() {
-		defer close(outOrder)
-		defer close(jobs)
-
-		for {
-			v, ok := <-in
-			if !ok {
-				return
-			}
-
-			ch := chpool.Get().(chan Maybe[K])
-			jobs <- mapJob[T, K]{in: v, out: ch}
-			outOrder <- ch
-		}
-	}()
-
-	mapF := func() {
-		for {
-			job, ok := <-jobs
-			if !ok {
-				return
-			}
-
-			result := Maybe[K]{
-				Error: job.in.Error,
-			}
-			if result.Error == nil {
-				result.Value, result.Error = mapper(job.in.Value)
-			}
-			job.out <- result
-		}
-	}
-
-	out := make(chan Maybe[K], capacity)
-	// Synchronize output
-	go func() {
-		defer close(out)
-		for in := range outOrder {
-			out <- <-in
-		}
-	}()
-
+	wg.Add(n)
 	for i := 0; i < n; i++ {
-		go mapF()
+		go func() {
+			defer wg.Done()
+			for {
+				job, ok := <-in
+				if !ok {
+					return
+				}
+
+				result := Maybe[K]{
+					Error: job.Error,
+				}
+				if result.Error == nil {
+					result.Value, result.Error = mapper(job.Value)
+				}
+				out <- result
+			}
+		}()
 	}
+
+	go func() {
+		wg.Wait()
+		close(out)
+	}()
 	return out
 }
 
-// RawUpdate is either the raw JSON representation of an Update message.
-type RawUpdate jsoniter.RawMessage
+// RawUpdate is the raw JSON representation of an Update message.
+type RawUpdate []byte
+
+// UnmarshalJSON is like json.RawMessage's UnmarshalJSON, however instead of
+// copying the data it simply assigns it. Specifically, this means that
+// the data used during decoding should not be reused elsewhere afterwards (i.e. no sync.Pool)
+func (r *RawUpdate) UnmarshalJSON(m []byte) error {
+	*r = m
+	return nil
+}
 
 // RawStream is a stream of raw updates.
 type RawStream Stream[Maybe[RawUpdate]]
 
 // AsTgBotAPI converts a RawStream into a stream of tgbotapi-style updates.
-func (s RawStream) AsTgBotAPI(capacity int) Stream[Maybe[tgbotapi.Update]] {
+func (s RawStream) AsTgBotAPI() Stream[Maybe[tgbotapi.Update]] {
 	return MappedStream(Stream[Maybe[RawUpdate]](s), func(u RawUpdate) (tu tgbotapi.Update, err error) {
-		err = jsoniter.Unmarshal([]byte(u), &tu)
+		err = json.Unmarshal([]byte(u), &tu)
 		return
-	}, capacity)
+	})
 }
 
 // RawStreamer is a provider of RawUpdate's updates via an unbuffered stream.

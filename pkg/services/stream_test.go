@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -16,18 +18,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func streamIs[T any](req *require.Assertions, s Stream[T], want []T) {
-	got := 0
+// streamContains validates that a stream contains the wanted values in any order
+func streamContains[T any](req *require.Assertions, s Stream[T], want []T) {
+	got := make([]bool, len(want))
 	req.Eventually(func() bool {
 		select {
 		case val, ok := <-s:
 			if !ok {
-				req.Equal(len(want), got, "less values on stream than wanted")
+				for _, v := range got {
+					req.True(v, "not all wanted values found on stream")
+				}
 				return true
 			}
-			req.Less(got, len(want), "more updates on stream than wanted")
-			req.Equal(want[got], val)
-			got++
+
+			var foundUnused bool
+			for i, v := range got {
+				if !v && reflect.DeepEqual(want[i], val) {
+					got[i], foundUnused = true, true
+					break
+				}
+			}
+			req.True(foundUnused, "redundant value found on stream: %q", val)
 		default:
 		}
 		return false
@@ -66,7 +77,7 @@ func TestRawStream_AsTgBotApi(t *testing.T) {
 			t.Parallel()
 			req := require.New(t)
 
-			stream := make(chan Maybe[RawUpdate])
+			stream := make(chan Maybe[RawUpdate], DefaultCapacity)
 			go func() {
 				defer close(stream)
 				for _, u := range tt.updates {
@@ -74,7 +85,7 @@ func TestRawStream_AsTgBotApi(t *testing.T) {
 				}
 			}()
 
-			streamIs(req, RawStream(stream).AsTgBotAPI(DefaultCapacity), tt.want)
+			streamContains(req, RawStream(stream).AsTgBotAPI(), tt.want)
 		})
 	}
 }
@@ -92,7 +103,12 @@ func encodeAPIResponse(data any) ([]byte, error) {
 		Ok:     true,
 		Result: data,
 	}
-	return json.Marshal(response)
+
+	b, err := json.Marshal(response)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling api response: %w", err)
+	}
+	return b, nil
 }
 
 type longPollTestRoundTripper struct {
@@ -104,8 +120,15 @@ type longPollTestRoundTripper struct {
 func (rt *longPollTestRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	select {
 	case <-req.Context().Done():
-		return nil, req.Context().Err()
+		return nil, fmt.Errorf("context done: %w", req.Context().Err())
 	default:
+	}
+	response := func(b []byte) *http.Response {
+		return &http.Response{
+			StatusCode:    http.StatusOK,
+			ContentLength: int64(len(b)),
+			Body:          io.NopCloser(bytes.NewBuffer(b)),
+		}
 	}
 
 	if strings.HasSuffix(req.URL.Path, "getMe") {
@@ -113,21 +136,18 @@ func (rt *longPollTestRoundTripper) RoundTrip(req *http.Request) (*http.Response
 		if err != nil {
 			return nil, err
 		}
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewBuffer(b))}, nil
+		return response(b), nil
 	}
 
 	var cur int
 	rt.mu.Lock()
 	cur, rt.i = rt.i, (rt.i+1)%len(rt.data)
 	rt.mu.Unlock()
-	return &http.Response{
-		StatusCode: 200,
-		Body:       io.NopCloser(bytes.NewBuffer(rt.data[cur])),
-	}, nil
+	return response(rt.data[cur]), nil
 }
 
-func newLongPollTestRoundTripper(b *testing.B) *longPollTestRoundTripper {
-	data := make([][]byte, b.N*longPollTestMessagesTotal/longPollTestMessagesPerResponse)
+func newLongPollTestClient(req *require.Assertions, n int) *http.Client {
+	data := make([][]byte, n*longPollTestMessagesTotal/longPollTestMessagesPerResponse)
 	for i := range data {
 		updates := make([]tgbotapi.Update, longPollTestMessagesPerResponse)
 		for j := range updates {
@@ -135,29 +155,16 @@ func newLongPollTestRoundTripper(b *testing.B) *longPollTestRoundTripper {
 		}
 
 		raw, err := encodeAPIResponse(updates)
-		if err != nil {
-			b.Error(err)
-			b.FailNow()
-			return nil
-		}
+		req.NoError(err)
 		data[i] = raw
 	}
-	return &longPollTestRoundTripper{data: data}
+	return &http.Client{Transport: &longPollTestRoundTripper{data: data}}
 }
 
 func longPollTestValidate(b *testing.B, s Stream[Maybe[tgbotapi.Update]]) {
-	end := longPollTestMessagesTotal * b.N
-	i, cnt := 0, 0
-	for u := range s {
-		if u.Error != nil {
-			b.Error(u.Error)
-			b.FailNow()
-		} else if u.Value.UpdateID != i {
-			b.Errorf("expected %d but got %d", i, u.Value.UpdateID)
-			b.FailNow()
-		}
-
-		i = (i + 1) % (b.N * longPollTestMessagesTotal)
+	b.Helper()
+	cnt, end := 0, longPollTestMessagesTotal*b.N
+	for range s {
 		cnt++
 		if cnt == end {
 			break
@@ -167,13 +174,11 @@ func longPollTestValidate(b *testing.B, s Stream[Maybe[tgbotapi.Update]]) {
 
 // Benchmark of simple long polling using a single goroutine receiving messages and decoding them
 func BenchmarkNaiveLongPoll(b *testing.B) {
+	req := require.New(b)
 	b.StopTimer()
 	b.Logf("Decoding %d messages %d times", longPollTestMessagesTotal, b.N)
-	api, err := tgbotapi.NewBotAPIWithClient("aboba", tgbotapi.APIEndpoint, &http.Client{Transport: newLongPollTestRoundTripper(b)})
-	if err != nil {
-		b.Error(err)
-		b.FailNow()
-	}
+	api, err := tgbotapi.NewBotAPIWithClient("aboba", tgbotapi.APIEndpoint, newLongPollTestClient(req, b.N))
+	req.NoError(err)
 
 	b.StartTimer()
 	updateCh, _ := api.GetUpdatesChan(tgbotapi.UpdateConfig{})
@@ -195,17 +200,16 @@ func BenchmarkNaiveLongPoll(b *testing.B) {
 
 // Benchmark of long poll using parallelized json decoding
 func BenchmarkOptimizedLongPoll(b *testing.B) {
+	req := require.New(b)
 	b.StopTimer()
 	b.Logf("Decoding %d messages %d times", longPollTestMessagesTotal, b.N)
-	streamer, err := NewLongPollStreamer("https://api.telegram.org", "aboba", LongPollOptions{Client: &http.Client{Transport: newLongPollTestRoundTripper(b)}})
-	if err != nil {
-		b.Error(err)
-		b.FailNow()
-	}
+	streamer, err := NewLongPollStreamer("https://api.telegram.org", "aboba", LongPollOptions{Client: newLongPollTestClient(req, b.N)})
+	req.NoError(err)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	b.StartTimer()
-	stream := streamer.Stream(ctx)
-	longPollTestValidate(b, stream.AsTgBotAPI(DefaultCapacity))
+	stream := streamer.Stream(ctx).AsTgBotAPI()
+	longPollTestValidate(b, stream)
 	cancel()
+	stream.Drain()
 }
