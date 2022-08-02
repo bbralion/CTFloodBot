@@ -26,21 +26,9 @@ type Maybe[T any] struct {
 // Stream is a readonly channel of some type.
 type Stream[T any] <-chan T
 
-// Drain drains the stream completely.
-func (s Stream[T]) Drain() {
-	for {
-		_, ok := <-s
-		if !ok {
-			return
-		}
-	}
-}
-
 // MappedStream maps a stream to a stream in parallel using the given mapper. runtime.NumCPU() goroutines
 // are used for mapping, and the returned stream will have the same capacity as the input stream.
 // The output order after processing is not synchronized or defined.
-//
-// Make sure to call stream.Drain if you suddenly stop reading from the returned stream.
 func MappedStream[T, K any](in Stream[Maybe[T]], mapper func(T) (K, error)) Stream[Maybe[K]] {
 	var wg sync.WaitGroup
 	n := runtime.NumCPU()
@@ -98,5 +86,7 @@ func (s RawStream) AsTgBotAPI() Stream[Maybe[tgbotapi.Update]] {
 
 // RawStreamer is a provider of RawUpdate's updates via an unbuffered stream.
 type RawStreamer interface {
+	// Stream launches a single instance of the streamer. In general, it isn't safe to use this concurrently.
+	// On context cancelation/deadline the streamer must stop streaming and close the stream.
 	Stream(ctx context.Context) RawStream
 }

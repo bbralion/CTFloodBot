@@ -52,7 +52,8 @@ func (s *longPollStreamer) poll(ctx context.Context) (*http.Response, error) {
 	return resp, nil
 }
 
-// readRespones tries to read the response in the fastest way possible
+// readRespones tries to read the response in the fastest way possible. That is, if ContentLength
+// is set, then we can use it in order to allocate a buffer wit the correct size from the get-go.
 func (s *longPollStreamer) readResponse(resp *http.Response) (buf []byte, err error) {
 	defer resp.Body.Close()
 
@@ -65,13 +66,14 @@ func (s *longPollStreamer) readResponse(resp *http.Response) (buf []byte, err er
 	return
 }
 
-func (s *longPollStreamer) parseUpdates(stream chan<- Maybe[RawUpdate], resp *http.Response) error {
+func (s *longPollStreamer) parseUpdates(ctx context.Context, stream chan<- Maybe[RawUpdate], resp *http.Response) error {
 	buf, err := s.readResponse(resp)
 	if err != nil {
 		return fmt.Errorf("reading getUpdates response: %w", err)
 	}
 
-	// Parse API response wrapper
+	// Parse API response wrapper. The updates here are parsed as RawUpdate's, which simply set
+	// their value to the correct portion of the prepared buffer, bypassing an extra copy.
 	var apiResp struct {
 		Ok          bool
 		Description string
@@ -85,6 +87,11 @@ func (s *longPollStreamer) parseUpdates(stream chan<- Maybe[RawUpdate], resp *ht
 	}
 
 	for _, u := range apiResp.Result {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
 		stream <- Maybe[RawUpdate]{Value: u}
 	}
 	if len(apiResp.Result) > 0 {
@@ -123,7 +130,7 @@ func (s *longPollStreamer) Stream(ctx context.Context) RawStream {
 				return
 			}
 
-			if err := s.parseUpdates(stream, resp); err != nil {
+			if err := s.parseUpdates(ctx, stream, resp); err != nil {
 				stream <- Maybe[RawUpdate]{Error: err}
 				return
 			}

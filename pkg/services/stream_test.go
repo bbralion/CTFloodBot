@@ -211,5 +211,4 @@ func BenchmarkOptimizedLongPoll(b *testing.B) {
 	stream := streamer.Stream(ctx).AsTgBotAPI()
 	longPollTestValidate(b, stream)
 	cancel()
-	stream.Drain()
 }
