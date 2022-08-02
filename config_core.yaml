@@ -1,4 +1,0 @@
-redis:
-  host: localhost:6379
-  username:
-  password: aboba

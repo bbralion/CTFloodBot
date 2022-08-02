@@ -1,0 +1,27 @@
+syntax = "proto3";
+package mux;
+
+// Config specifies the information clients require to connect to the proxy.
+message Config {
+  string proxy_endpoint = 1;
+}
+
+// Update is a single update received by the proxy, passed as the actual stringified update object.
+message Update {
+  string json = 1;
+}
+
+message ConfigRequest {}
+
+message ConfigResponse {
+  Config config = 1;
+}
+
+message RegisterRequest {
+  repeated string matchers = 1;
+}
+
+service MultiplexerService {
+  rpc GetConfig(ConfigRequest) returns (ConfigResponse);
+  rpc RegisterHandler(RegisterRequest) returns (stream Update);
+}

@@ -1,0 +1,62 @@
+run:
+  timeout: 2m
+
+linters:
+  enable:
+    - asciicheck
+    - bodyclose
+    - contextcheck
+    - deadcode
+    - dogsled
+    - durationcheck
+    - dupl
+    - errcheck
+    - errchkjson
+    - errname
+    - errorlint
+    - exhaustive
+    - exportloopref
+    - gocognit
+    - gocritic
+    - gofumpt
+    - goimports
+    - gomnd
+    - gomoddirectives
+    - gosec
+    - gosimple
+    - govet
+    - ifshort
+    - ineffassign
+    - importas
+    - misspell
+    - nilerr
+    - noctx
+    - prealloc
+    - predeclared
+    - revive
+    - staticcheck
+    - thelper
+    - tparallel
+    - unconvert
+    - unparam
+    - unused
+    - varcheck
+    - whitespace
+    - wrapcheck
+
+linters-settings:
+  unparam:
+    check-exported: false
+  unused:
+    check-exported: false
+  gocognit:
+    min-complexity: 20
+  wrapcheck:
+    ignoreSigs:
+      - .Errorf(
+      - errors.New(
+      - status.Error(
+      - retry.Recoverable(
+      - retry.Unrecoverable(
+
+modules-download-mode: readonly
